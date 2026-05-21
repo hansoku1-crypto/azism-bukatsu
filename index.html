@@ -57,16 +57,11 @@
             </div>
 
             <div class="section-title">
-              <h3>次回予定</h3>
-              <button class="text-btn" type="button" data-goto="schedule">調整</button>
-            </div>
-            <div id="upcomingList" class="schedule-list"></div>
-
-            <div class="section-title">
               <h3>最新活動</h3>
               <button class="text-btn" type="button" data-goto="records">見る</button>
             </div>
             <div id="latestRecords" class="record-list"></div>
+            <button id="homeRecordButton" class="home-fab" type="button" aria-label="活動記録を登録">＋</button>
           </section>
 
           <section id="clubsScreen" class="screen" data-title="部活">
@@ -96,12 +91,16 @@
               </label>
               <label>
                 写真
-                <input name="photo" type="file" accept="image/*">
+                <input name="photo" type="file" accept="image/*" multiple>
               </label>
               <button class="primary-btn" type="submit">記録する</button>
               <p id="recordMessage" class="form-message" role="status"></p>
             </form>
             <div id="recordList" class="record-list full"></div>
+          </section>
+
+          <section id="recordDetailScreen" class="screen" data-title="活動詳細">
+            <div id="recordDetail" class="record-detail"></div>
           </section>
 
           <section id="scheduleScreen" class="screen" data-title="日程調整">
