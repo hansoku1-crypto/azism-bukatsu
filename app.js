@@ -198,3 +198,519 @@ async function createFirestoreAdapter(config) {
   const stateRef = firestoreModule.doc(db, FIREBASE_STATE_COLLECTION, FIREBASE_STATE_DOCUMENT);
 
   return {
+    mode: "firebase",
+    async loadState() {
+      const snapshot = await firestoreModule.getDoc(stateRef);
+      if (snapshot.exists()) {
+        return normalizeState(snapshot.data());
+      }
+
+      const defaultState = createDefaultState();
+      await firestoreModule.setDoc(stateRef, defaultState);
+      return defaultState;
+    },
+    async saveState(nextState) {
+      await firestoreModule.setDoc(stateRef, cloneData(nextState));
+    }
+  };
+}
+
+async function saveState() {
+  await storage.saveState(state);
+}
+
+function cloneData(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function loadSession() {
+  const saved = localStorage.getItem(SESSION_KEY);
+  if (!saved) return null;
+  return JSON.parse(saved);
+}
+
+function saveSession(employee) {
+  currentEmployee = employee;
+  localStorage.setItem(SESSION_KEY, JSON.stringify(employee));
+}
+
+function stripPassword(employee) {
+  const { password, ...safeEmployee } = employee;
+  return safeEmployee;
+}
+
+async function init() {
+  storage = await createStorageAdapter();
+  state = await storage.loadState();
+  bindEvents();
+  setTodayDefaults();
+  document.querySelector("#currentDate").textContent = new Intl.DateTimeFormat("ja-JP", {
+    month: "long",
+    day: "numeric",
+    weekday: "short"
+  }).format(new Date());
+
+  if (currentEmployee) {
+    enterApp();
+  }
+}
+
+function bindEvents() {
+  document.querySelector("#loginForm").addEventListener("submit", handleLogin);
+  document.querySelector("#logoutButton").addEventListener("click", handleLogout);
+  document.querySelector("#recordForm").addEventListener("submit", handleRecordSubmit);
+  document.querySelector("#scheduleForm").addEventListener("submit", handleScheduleSubmit);
+  document.querySelector("#profileForm").addEventListener("submit", handleProfileSubmit);
+  document.querySelector("#smartHrSyncButton").addEventListener("click", handleSmartHrSync);
+
+  navButtons.forEach((button) => {
+    button.addEventListener("click", () => showScreen(button.dataset.screen));
+  });
+
+  document.querySelectorAll("[data-goto]").forEach((button) => {
+    button.addEventListener("click", () => showScreen(`${button.dataset.goto}Screen`));
+  });
+}
+
+function setTodayDefaults() {
+  const today = new Date().toISOString().slice(0, 10);
+  document.querySelector("#recordForm [name='date']").value = today;
+  document.querySelector("#scheduleForm [name='date']").value = today;
+  document.querySelector("#scheduleForm [name='time']").value = "19:00";
+}
+
+async function handleLogin(event) {
+  event.preventDefault();
+  const form = new FormData(event.currentTarget);
+  const message = document.querySelector("#loginMessage");
+  message.textContent = "";
+
+  try {
+    const employee = await employeeProvider.signIn(form.get("employeeId").trim(), form.get("password"));
+    saveSession(employee);
+    enterApp();
+  } catch (error) {
+    message.textContent = error.message;
+  }
+}
+
+function handleLogout() {
+  currentEmployee = null;
+  localStorage.removeItem(SESSION_KEY);
+  loginView.hidden = false;
+  appView.hidden = true;
+}
+
+function enterApp() {
+  loginView.hidden = true;
+  appView.hidden = false;
+  activeClub = currentEmployee.clubs[0] || state.clubs[0].name;
+  populateClubSelects();
+  renderAll();
+  showScreen("homeScreen");
+}
+
+function showScreen(screenId) {
+  screens.forEach((screen) => screen.classList.toggle("active", screen.id === screenId));
+  navButtons.forEach((button) => button.classList.toggle("active", button.dataset.screen === screenId));
+  const activeScreen = document.querySelector(`#${screenId}`);
+  document.querySelector("#screenTitle").textContent = activeScreen.dataset.title;
+}
+
+function renderAll() {
+  renderHome();
+  renderClubs();
+  renderRecords();
+  renderSchedules();
+  renderProfile();
+}
+
+function currentClubNames() {
+  return currentEmployee.clubs.length ? currentEmployee.clubs : state.clubs.map((club) => club.name);
+}
+
+function populateClubSelects() {
+  const options = currentClubNames().map((club) => `<option value="${escapeHtml(club)}">${escapeHtml(club)}</option>`).join("");
+  document.querySelector("#recordForm [name='club']").innerHTML = options;
+  document.querySelector("#scheduleForm [name='club']").innerHTML = options;
+}
+
+function renderHome() {
+  document.querySelector("#welcomeName").textContent = `${currentEmployee.name}さん`;
+  document.querySelector("#welcomeMeta").textContent = `${currentEmployee.division} / ${currentEmployee.store}`;
+  document.querySelector("#clubCountBadge").textContent = `${currentEmployee.clubs.length}部活`;
+
+  const mySchedules = state.schedules
+    .filter((item) => currentClubNames().includes(item.club))
+    .sort((a, b) => `${a.date}${a.time}`.localeCompare(`${b.date}${b.time}`))
+    .slice(0, 2);
+
+  renderScheduleCollection(document.querySelector("#upcomingList"), mySchedules);
+
+  const latest = state.records
+    .filter((record) => currentClubNames().includes(record.club))
+    .sort((a, b) => b.date.localeCompare(a.date))
+    .slice(0, 3);
+
+  renderRecordCollection(document.querySelector("#latestRecords"), latest);
+}
+
+function renderClubs() {
+  const filter = document.querySelector(".club-filter");
+  filter.innerHTML = state.clubs
+    .filter((club) => currentClubNames().includes(club.name))
+    .map((club) => {
+      const active = club.name === activeClub ? "active" : "";
+      return `<button type="button" class="${active}" data-club="${escapeHtml(club.name)}">${escapeHtml(club.name)}</button>`;
+    })
+    .join("");
+
+  filter.querySelectorAll("button").forEach((button) => {
+    button.addEventListener("click", () => {
+      activeClub = button.dataset.club;
+      renderClubs();
+    });
+  });
+
+  const club = state.clubs.find((item) => item.name === activeClub) || state.clubs[0];
+  const clubRecords = state.records.filter((record) => record.club === club.name).length;
+  const next = state.schedules.find((schedule) => schedule.club === club.name);
+
+  document.querySelector("#clubDetails").innerHTML = `
+    <article class="club-card">
+      <div class="club-top">
+        <div>
+          <span class="club-pill">${escapeHtml(club.owner)} 代表</span>
+          <h3>${escapeHtml(club.name)}</h3>
+        </div>
+        <span class="status-pill">${clubRecords}件</span>
+      </div>
+      <p>${escapeHtml(club.description)}</p>
+      <div class="member-list">
+        ${club.members.map((member) => `<span class="member-chip">${escapeHtml(member)}</span>`).join("")}
+      </div>
+    </article>
+    <article class="schedule-card">
+      <div class="schedule-top">
+        <div>
+          <span class="club-pill">次回</span>
+          <h3>${next ? formatDate(next.date) : "未設定"}</h3>
+          <p>${next ? `${next.time} / ${escapeHtml(next.message)}` : "候補日を追加してください。"}</p>
+        </div>
+      </div>
+    </article>
+  `;
+}
+
+function renderRecords() {
+  const records = state.records
+    .filter((record) => currentClubNames().includes(record.club))
+    .sort((a, b) => b.date.localeCompare(a.date));
+  renderRecordCollection(document.querySelector("#recordList"), records);
+}
+
+function renderRecordCollection(container, records) {
+  if (!records.length) {
+    container.innerHTML = `<article class="record-card"><div class="record-photo">CL</div><div class="record-body"><h4>記録はまだありません</h4><p>最初の活動を登録できます。</p></div></article>`;
+    return;
+  }
+
+  container.innerHTML = "";
+  const template = document.querySelector("#recordTemplate");
+  records.forEach((record) => {
+    const node = template.content.cloneNode(true);
+    const photo = node.querySelector(".record-photo");
+    if (record.photo) {
+      photo.innerHTML = `<img src="${record.photo}" alt="">`;
+    } else {
+      photo.textContent = record.club.slice(0, 2);
+    }
+    node.querySelector(".club-pill").textContent = record.club;
+    node.querySelector("time").textContent = formatDate(record.date);
+    node.querySelector("h4").textContent = record.title;
+    node.querySelector("p").textContent = record.body;
+    node.querySelector("small").textContent = `${record.author} が投稿`;
+    container.appendChild(node);
+  });
+}
+
+function renderSchedules() {
+  const schedules = state.schedules
+    .filter((schedule) => currentClubNames().includes(schedule.club))
+    .sort((a, b) => `${a.date}${a.time}`.localeCompare(`${b.date}${b.time}`));
+  renderScheduleCollection(document.querySelector("#scheduleList"), schedules);
+}
+
+function renderScheduleCollection(container, schedules) {
+  if (!schedules.length) {
+    container.innerHTML = `<article class="schedule-card"><h3>候補日はまだありません</h3><p>次回活動日を登録すると、所属者へ通知する想定です。</p></article>`;
+    return;
+  }
+
+  container.innerHTML = schedules.map((schedule) => {
+    const vote = schedule.votes[currentEmployee.name] || "";
+    const counts = countVotes(schedule.votes);
+    return `
+      <article class="schedule-card" data-schedule-id="${schedule.id}">
+        <div class="schedule-top">
+          <div>
+            <span class="club-pill">${escapeHtml(schedule.club)}</span>
+            <h3>${escapeHtml(schedule.message || "次回活動")}</h3>
+            <p>通知先: ${escapeHtml(getClubMembers(schedule.club).join("、"))}</p>
+          </div>
+          <div class="schedule-date">
+            ${formatShortDate(schedule.date)}
+            <small>${escapeHtml(schedule.time)}</small>
+          </div>
+        </div>
+        <div class="vote-row">
+          <button class="vote-btn ${vote === "yes" ? "active" : ""}" type="button" data-vote="yes">参加</button>
+          <button class="vote-btn ${vote === "maybe" ? "active" : ""}" type="button" data-vote="maybe">未定</button>
+          <button class="vote-btn ${vote === "no" ? "active" : ""}" type="button" data-vote="no">不参加</button>
+        </div>
+        <div class="vote-summary">
+          <span>参加 ${counts.yes}</span>
+          <span>未定 ${counts.maybe}</span>
+          <span>不参加 ${counts.no}</span>
+        </div>
+      </article>
+    `;
+  }).join("");
+
+  container.querySelectorAll(".vote-btn").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const card = button.closest("[data-schedule-id]");
+      const schedule = state.schedules.find((item) => item.id === card.dataset.scheduleId);
+      schedule.votes[currentEmployee.name] = button.dataset.vote;
+      await saveState();
+      renderAll();
+    });
+  });
+}
+
+function renderProfile() {
+  document.querySelector("#profileInitial").textContent = currentEmployee.name.slice(0, 1);
+  document.querySelector("#profileName").textContent = currentEmployee.name;
+  document.querySelector("#profileMeta").textContent = `${currentEmployee.division} / ${currentEmployee.store}`;
+
+  const form = document.querySelector("#profileForm");
+  form.elements.name.value = currentEmployee.name;
+  form.elements.division.value = currentEmployee.division;
+  form.elements.store.value = currentEmployee.store;
+
+  document.querySelector("#clubCheckboxes").innerHTML = state.clubs.map((club) => {
+    const checked = currentEmployee.clubs.includes(club.name) ? "checked" : "";
+    return `
+      <label>
+        <input type="checkbox" name="clubs" value="${escapeHtml(club.name)}" ${checked}>
+        ${escapeHtml(club.name)}
+      </label>
+    `;
+  }).join("");
+
+  document.querySelector("#tenantInput").value = state.smartHr.tenant;
+  document.querySelector("#smartHrStatus").textContent = state.smartHr.syncedAt ? "同期済み" : "未同期";
+}
+
+async function handleRecordSubmit(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const formData = new FormData(form);
+  const message = document.querySelector("#recordMessage");
+  const photoFile = formData.get("photo");
+  let record = null;
+
+  try {
+    message.textContent = photoFile && photoFile.size ? "写真を圧縮しています。" : "";
+    const photo = photoFile && photoFile.size ? await compressImageFile(photoFile) : "";
+
+    record = {
+    id: createId(),
+    club: formData.get("club"),
+    date: formData.get("date"),
+    title: formData.get("title").trim(),
+    body: formData.get("body").trim(),
+    author: currentEmployee.name,
+    photo
+    };
+
+    state.records.unshift(record);
+    await saveState();
+    form.reset();
+    setTodayDefaults();
+    populateClubSelects();
+    message.textContent = "活動記録を保存しました。";
+    renderAll();
+  } catch (error) {
+    if (record) {
+      state.records = state.records.filter((item) => item.id !== record.id);
+    }
+    console.error(error);
+    message.textContent = error.message || "活動記録を保存できませんでした。";
+  }
+}
+
+async function handleScheduleSubmit(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const formData = new FormData(form);
+  const club = formData.get("club");
+  state.schedules.push({
+    id: createId(),
+    club,
+    date: formData.get("date"),
+    time: formData.get("time"),
+    message: formData.get("message").trim(),
+    votes: {
+      [currentEmployee.name]: "yes"
+    }
+  });
+  await saveState();
+  form.reset();
+  setTodayDefaults();
+  populateClubSelects();
+  document.querySelector("#scheduleMessage").textContent = `${club} の所属者へ通知予定を作成しました。`;
+  renderAll();
+}
+
+async function handleProfileSubmit(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const formData = new FormData(form);
+  const clubs = formData.getAll("clubs");
+  currentEmployee = {
+    ...currentEmployee,
+    name: formData.get("name").trim(),
+    division: formData.get("division").trim(),
+    store: formData.get("store").trim(),
+    clubs
+  };
+
+  const employee = state.employees.find((item) => item.id === currentEmployee.id);
+  if (employee) {
+    employee.name = currentEmployee.name;
+    employee.division = currentEmployee.division;
+    employee.store = currentEmployee.store;
+    employee.clubs = clubs;
+  }
+
+  saveSession(currentEmployee);
+  await saveState();
+  populateClubSelects();
+  document.querySelector("#profileMessage").textContent = "プロフィールを更新しました。";
+  renderAll();
+}
+
+async function handleSmartHrSync() {
+  const tenant = document.querySelector("#tenantInput").value.trim();
+  const message = document.querySelector("#smartHrMessage");
+  message.textContent = "";
+
+  try {
+    const result = await employeeProvider.syncFromSmartHR(tenant);
+    state.smartHr = {
+      tenant,
+      syncedAt: result.syncedAt
+    };
+    await saveState();
+    renderProfile();
+    message.textContent = `${result.count}名分の社員データを同期しました。`;
+  } catch (error) {
+    message.textContent = error.message;
+  }
+}
+
+function getClubMembers(clubName) {
+  const club = state.clubs.find((item) => item.name === clubName);
+  return club ? club.members : [];
+}
+
+function countVotes(votes) {
+  return Object.values(votes).reduce((total, vote) => {
+    total[vote] += 1;
+    return total;
+  }, { yes: 0, maybe: 0, no: 0 });
+}
+
+function formatDate(value) {
+  return new Intl.DateTimeFormat("ja-JP", {
+    month: "long",
+    day: "numeric",
+    weekday: "short"
+  }).format(new Date(value));
+}
+
+function formatShortDate(value) {
+  return new Intl.DateTimeFormat("ja-JP", {
+    month: "numeric",
+    day: "numeric"
+  }).format(new Date(value));
+}
+
+async function compressImageFile(file) {
+  if (!file.type.startsWith("image/")) {
+    throw new Error("画像ファイルを選択してください。");
+  }
+
+  const source = await loadImage(file);
+  const { width, height } = fitImageSize(source.width, source.height, IMAGE_MAX_DIMENSION);
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+
+  const context = canvas.getContext("2d");
+  context.drawImage(source, 0, 0, width, height);
+  URL.revokeObjectURL(source.src);
+
+  for (const quality of IMAGE_QUALITY_STEPS) {
+    const dataUrl = canvas.toDataURL("image/jpeg", quality);
+    if (estimateDataUrlBytes(dataUrl) <= IMAGE_MAX_BYTES) {
+      return dataUrl;
+    }
+  }
+
+  throw new Error("写真サイズが大きすぎます。別の写真を選ぶか、トリミングしてから添付してください。");
+}
+
+function loadImage(file) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => {
+      URL.revokeObjectURL(image.src);
+      reject(new Error("写真を読み込めませんでした。"));
+    };
+    image.src = URL.createObjectURL(file);
+  });
+}
+
+function fitImageSize(width, height, maxDimension) {
+  const scale = Math.min(1, maxDimension / Math.max(width, height));
+  return {
+    width: Math.max(1, Math.round(width * scale)),
+    height: Math.max(1, Math.round(height * scale))
+  };
+}
+
+function estimateDataUrlBytes(dataUrl) {
+  const base64 = dataUrl.split(",")[1] || "";
+  return Math.ceil((base64.length * 3) / 4);
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+function createId() {
+  if (crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  return `id-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+init();
