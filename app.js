@@ -6,6 +6,7 @@ const FIREBASE_STATE_DOCUMENT = "appState";
 const IMAGE_MAX_DIMENSION = 600;
 const IMAGE_MAX_BYTES = 180 * 1024;
 const IMAGE_QUALITY_STEPS = [0.72, 0.62, 0.52, 0.42];
+const MAX_RECORD_PHOTOS = 3;
 
 const seedEmployees = [
   {
@@ -154,12 +155,21 @@ function normalizeState(savedState) {
   return {
     employees: Array.isArray(savedState.employees) && savedState.employees.length ? savedState.employees : defaults.employees,
     clubs: Array.isArray(savedState.clubs) && savedState.clubs.length ? savedState.clubs : defaults.clubs,
-    records: Array.isArray(savedState.records) ? savedState.records : defaults.records,
+    records: Array.isArray(savedState.records) ? savedState.records.map(normalizeRecord) : defaults.records.map(normalizeRecord),
     schedules: Array.isArray(savedState.schedules) ? savedState.schedules : defaults.schedules,
     smartHr: {
       ...defaults.smartHr,
       ...(savedState.smartHr || {})
     }
+  };
+}
+
+function normalizeRecord(record) {
+  const photos = Array.isArray(record.photos) ? record.photos : (record.photo ? [record.photo] : []);
+  return {
+    ...record,
+    photos: photos.slice(0, MAX_RECORD_PHOTOS),
+    photo: record.photo || photos[0] || ""
   };
 }
 
@@ -262,6 +272,7 @@ function bindEvents() {
   document.querySelector("#scheduleForm").addEventListener("submit", handleScheduleSubmit);
   document.querySelector("#profileForm").addEventListener("submit", handleProfileSubmit);
   document.querySelector("#smartHrSyncButton").addEventListener("click", handleSmartHrSync);
+  document.querySelector("#homeRecordButton").addEventListener("click", () => showRecordForm());
 
   navButtons.forEach((button) => {
     button.addEventListener("click", () => showScreen(button.dataset.screen));
@@ -315,6 +326,18 @@ function showScreen(screenId) {
   navButtons.forEach((button) => button.classList.toggle("active", button.dataset.screen === screenId));
   const activeScreen = document.querySelector(`#${screenId}`);
   document.querySelector("#screenTitle").textContent = activeScreen.dataset.title;
+  document.querySelector(".content-scroll").scrollTop = 0;
+}
+
+function showRecordForm() {
+  showScreen("recordsScreen");
+}
+
+function showRecordDetail(recordId) {
+  const record = state.records.find((item) => item.id === recordId);
+  if (!record) return;
+  renderRecordDetail(record);
+  showScreen("recordDetailScreen");
 }
 
 function renderAll() {
@@ -339,13 +362,6 @@ function renderHome() {
   document.querySelector("#welcomeName").textContent = `${currentEmployee.name}さん`;
   document.querySelector("#welcomeMeta").textContent = `${currentEmployee.division} / ${currentEmployee.store}`;
   document.querySelector("#clubCountBadge").textContent = `${currentEmployee.clubs.length}部活`;
-
-  const mySchedules = state.schedules
-    .filter((item) => currentClubNames().includes(item.club))
-    .sort((a, b) => `${a.date}${a.time}`.localeCompare(`${b.date}${b.time}`))
-    .slice(0, 2);
-
-  renderScheduleCollection(document.querySelector("#upcomingList"), mySchedules);
 
   const latest = state.records
     .filter((record) => currentClubNames().includes(record.club))
@@ -419,12 +435,28 @@ function renderRecordCollection(container, records) {
   const template = document.querySelector("#recordTemplate");
   records.forEach((record) => {
     const node = template.content.cloneNode(true);
+    const card = node.querySelector(".record-card");
     const photo = node.querySelector(".record-photo");
-    if (record.photo) {
-      photo.innerHTML = `<img src="${record.photo}" alt="">`;
+    const photos = getRecordPhotos(record);
+    if (photos.length) {
+      photo.innerHTML = `<img src="${photos[0]}" alt="">`;
+      if (photos.length > 1) {
+        photo.insertAdjacentHTML("beforeend", `<span class="photo-count">+${photos.length - 1}</span>`);
+      }
     } else {
       photo.textContent = record.club.slice(0, 2);
     }
+    card.dataset.recordId = record.id;
+    card.tabIndex = 0;
+    card.setAttribute("role", "button");
+    card.setAttribute("aria-label", `${record.title} の詳細を見る`);
+    card.addEventListener("click", () => showRecordDetail(record.id));
+    card.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        showRecordDetail(record.id);
+      }
+    });
     node.querySelector(".club-pill").textContent = record.club;
     node.querySelector("time").textContent = formatDate(record.date);
     node.querySelector("h4").textContent = record.title;
@@ -434,11 +466,43 @@ function renderRecordCollection(container, records) {
   });
 }
 
+function renderRecordDetail(record) {
+  const photos = getRecordPhotos(record);
+  const photoHtml = photos.length
+    ? `<div class="detail-photo-grid ${photos.length === 1 ? "single" : ""}">
+        ${photos.map((photo) => `<img src="${photo}" alt="">`).join("")}
+      </div>`
+    : `<div class="detail-photo-empty">${escapeHtml(record.club.slice(0, 2))}</div>`;
+
+  document.querySelector("#recordDetail").innerHTML = `
+    <button class="secondary-btn detail-back" type="button">活動一覧へ戻る</button>
+    <article class="detail-card panel">
+      <div class="record-head">
+        <span class="club-pill">${escapeHtml(record.club)}</span>
+        <time>${formatDate(record.date)}</time>
+      </div>
+      <h3>${escapeHtml(record.title)}</h3>
+      ${photoHtml}
+      <p>${escapeHtml(record.body)}</p>
+      <small>${escapeHtml(record.author)} が投稿</small>
+    </article>
+  `;
+
+  document.querySelector(".detail-back").addEventListener("click", () => showScreen("recordsScreen"));
+}
+
 function renderSchedules() {
   const schedules = state.schedules
     .filter((schedule) => currentClubNames().includes(schedule.club))
     .sort((a, b) => `${a.date}${a.time}`.localeCompare(`${b.date}${b.time}`));
   renderScheduleCollection(document.querySelector("#scheduleList"), schedules);
+}
+
+function getRecordPhotos(record) {
+  if (Array.isArray(record.photos)) {
+    return record.photos.filter(Boolean).slice(0, MAX_RECORD_PHOTOS);
+  }
+  return record.photo ? [record.photo] : [];
 }
 
 function renderScheduleCollection(container, schedules) {
@@ -517,12 +581,19 @@ async function handleRecordSubmit(event) {
   const form = event.currentTarget;
   const formData = new FormData(form);
   const message = document.querySelector("#recordMessage");
-  const photoFile = formData.get("photo");
+  const photoFiles = [...form.elements.photo.files];
   let record = null;
 
   try {
-    message.textContent = photoFile && photoFile.size ? "写真を圧縮しています。" : "";
-    const photo = photoFile && photoFile.size ? await compressImageFile(photoFile) : "";
+    if (photoFiles.length > MAX_RECORD_PHOTOS) {
+      throw new Error(`写真は${MAX_RECORD_PHOTOS}枚まで添付できます。`);
+    }
+
+    message.textContent = photoFiles.length ? "写真を圧縮しています。" : "";
+    const photos = [];
+    for (const file of photoFiles) {
+      photos.push(await compressImageFile(file));
+    }
 
     record = {
     id: createId(),
@@ -531,7 +602,8 @@ async function handleRecordSubmit(event) {
     title: formData.get("title").trim(),
     body: formData.get("body").trim(),
     author: currentEmployee.name,
-    photo
+    photo: photos[0] || "",
+    photos
     };
 
     state.records.unshift(record);
