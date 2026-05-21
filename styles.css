@@ -347,8 +347,18 @@ textarea:focus {
   background: #fff;
 }
 
+.record-card[role="button"] {
+  cursor: pointer;
+}
+
+.record-card[role="button"]:focus-visible {
+  outline: 3px solid rgba(9, 108, 103, 0.24);
+  outline-offset: 2px;
+}
+
 .record-photo {
   display: grid;
+  position: relative;
   min-height: 116px;
   place-items: center;
   background: linear-gradient(135deg, var(--green-soft), #f6f0dc);
@@ -360,6 +370,19 @@ textarea:focus {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+.photo-count {
+  position: absolute;
+  right: 7px;
+  bottom: 7px;
+  min-width: 28px;
+  border-radius: 999px;
+  background: rgba(23, 32, 41, 0.78);
+  color: #fff;
+  padding: 4px 7px;
+  font-size: 0.72rem;
+  text-align: center;
 }
 
 .record-body {
@@ -573,6 +596,86 @@ time,
   border-top: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.97);
   box-shadow: 0 -8px 20px rgba(27, 39, 55, 0.08);
+}
+
+.home-fab {
+  position: fixed;
+  right: max(18px, calc((100vw - 430px) / 2 + 18px));
+  bottom: calc(86px + env(safe-area-inset-bottom));
+  z-index: 18;
+  display: grid;
+  width: 58px;
+  height: 58px;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  background: var(--primary);
+  color: #fff;
+  box-shadow: 0 12px 28px rgba(9, 108, 103, 0.32);
+  font-size: 2rem;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.record-detail {
+  display: grid;
+  gap: 12px;
+}
+
+.detail-back {
+  width: fit-content;
+  padding: 10px 14px;
+}
+
+.detail-card {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+}
+
+.detail-card h3 {
+  font-size: 1.25rem;
+}
+
+.detail-card p {
+  margin-bottom: 0;
+  color: var(--ink);
+  font-size: 0.94rem;
+  line-height: 1.75;
+  white-space: pre-wrap;
+}
+
+.detail-card small {
+  color: var(--muted);
+}
+
+.detail-photo-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.detail-photo-grid.single {
+  grid-template-columns: 1fr;
+}
+
+.detail-photo-grid img,
+.detail-photo-empty {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  border-radius: 8px;
+}
+
+.detail-photo-grid img {
+  object-fit: cover;
+}
+
+.detail-photo-empty {
+  display: grid;
+  place-items: center;
+  background: linear-gradient(135deg, var(--green-soft), #f6f0dc);
+  color: var(--primary);
+  font-weight: 900;
 }
 
 .nav-btn {
